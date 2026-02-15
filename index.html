@@ -186,7 +186,7 @@ async function saveImage(burstIndex = 0) {
         String(now.getMilliseconds()).padStart(3,'0');
 
     const filename = `${timestamp}_burst${burstIndex}.png`;
-
+console.log("saving: " + filename);
     const fileHandle = await folderHandle.getFileHandle(filename, { create: true });
     const writable = await fileHandle.createWritable();
     await writable.write(blob);

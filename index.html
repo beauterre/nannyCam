@@ -26,39 +26,52 @@ body {
     height: 100vh;
     object-fit: cover;
 }
-video, canvas {
+video {
+    display: none;
+}
+canvas {
     display: none;
 }
 </style>
 </head>
 <body>
 
-<button id="startBtn">Start Nanny Cam v202602151225</button>
+<button id="startBtn">Start Nanny Cam v202602151234</button>
 <img id="coverImage" src="inconspicuous.png" />
 
 <video id="video" autoplay playsinline></video>
-<canvas id="canvas"></canvas>
+<canvas id="captureCanvas"></canvas>
 
 <script>
 const video = document.getElementById("video");
-const canvas = document.getElementById("canvas");
-const ctx = canvas.getContext("2d");
 const startBtn = document.getElementById("startBtn");
 const coverImage = document.getElementById("coverImage");
 
-let previousFrame = null;
+const captureCanvas = document.getElementById("captureCanvas");
+const captureCtx = captureCanvas.getContext("2d");
+
+// --- Detection configuration ---
+const DETECT_WIDTH = 32;
+const MOTION_THRESHOLD = 18;
+const MOTION_BLOCK_TRIGGER = 6;
+const BG_LEARN_RATE = 0.04;
+
+let detectCanvas = document.createElement("canvas");
+let detectCtx = detectCanvas.getContext("2d");
+let detectHeight = 0;
+let backgroundModel = null;
+
 let folderHandle = null;
 let wakeLock = null;
 let lastSaveTime = 0;
 
-const SAVE_COOLDOWN = 3000; // 3 seconds
+const SAVE_COOLDOWN = 3000;
 const BURST_COUNT = 5;
-const BURST_INTERVAL = 200; // ms between burst shots
+const BURST_INTERVAL = 200;
 
 const BRIGHTNESS_BOOST = 1.4;
 const CONTRAST = 1.2;
 
-// Memory queue for safe background writes
 const writeQueue = [];
 
 // ---------- Safe file writer ----------
@@ -69,15 +82,12 @@ async function safeWriteFile(filename, blob) {
         await writable.write(blob);
         await writable.close();
     } catch (err) {
-        console.warn("Write blocked, retrying permission check...");
         const perm = await folderHandle.queryPermission({ mode: "readwrite" });
         if (perm === "granted") {
             const fileHandle = await folderHandle.getFileHandle(filename, { create: true });
             const writable = await fileHandle.createWritable();
             await writable.write(blob);
             await writable.close();
-        } else {
-            console.error("Permission lost.");
         }
     }
 }
@@ -95,12 +105,11 @@ async function writerLoop() {
 }
 writerLoop();
 
-// ---------- Click handler ----------
+// ---------- Start ----------
 startBtn.addEventListener("click", async () => {
     try {
-        folderHandle = await window.showDirectoryPicker({
-            mode: "readwrite"
-        });
+
+        folderHandle = await window.showDirectoryPicker({ mode: "readwrite" });
 
         await document.documentElement.requestFullscreen();
 
@@ -115,36 +124,96 @@ startBtn.addEventListener("click", async () => {
         coverImage.style.display = "block";
 
         video.onloadedmetadata = () => {
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
+
+            // Full resolution capture canvas
+            captureCanvas.width = video.videoWidth;
+            captureCanvas.height = video.videoHeight;
+
+            // Detection canvas setup
+            const aspect = video.videoHeight / video.videoWidth;
+            detectHeight = Math.floor(DETECT_WIDTH * aspect);
+
+            detectCanvas.width = DETECT_WIDTH;
+            detectCanvas.height = detectHeight;
+
             detectMotion();
         };
+
     } catch(err) {
         alert("Permissions required.");
-        console.error(err);
     }
 });
 
-// ---------- Motion detection (1px) ----------
-async function detectMotion() {
-    ctx.drawImage(video, 0, 0, 1, 1);
-    const frame = ctx.getImageData(0, 0, 1, 1);
+// ---------- Motion Detection ----------
+function detectMotion() {
+
+    detectCtx.drawImage(video, 0, 0, DETECT_WIDTH, detectHeight);
+    const frame = detectCtx.getImageData(0, 0, DETECT_WIDTH, detectHeight);
     const data = frame.data;
+    const pixelCount = DETECT_WIDTH * detectHeight;
 
-    const brightness = 0.3*data[0] + 0.59*data[1] + 0.11*data[2];
+    if (!backgroundModel) {
+        backgroundModel = new Float32Array(pixelCount);
+        for (let i = 0, j = 0; i < data.length; i += 4, j++) {
+            backgroundModel[j] =
+                0.3 * data[i] +
+                0.59 * data[i + 1] +
+                0.11 * data[i + 2];
+        }
+        requestAnimationFrame(detectMotion);
+        return;
+    }
 
-    if(previousFrame !== null) {
-        const change = Math.abs(brightness - previousFrame);
-        if(change > 8) {
-            const now = Date.now();
-            if(now - lastSaveTime > SAVE_COOLDOWN) {
-                lastSaveTime = now;
-                captureBurst();
+    let blockChanges = 0;
+    const blockSize = 4;
+
+    for (let by = 0; by < detectHeight; by += blockSize) {
+        for (let bx = 0; bx < DETECT_WIDTH; bx += blockSize) {
+
+            let blockMotion = 0;
+
+            for (let y = 0; y < blockSize; y++) {
+                for (let x = 0; x < blockSize; x++) {
+
+                    const px = bx + x;
+                    const py = by + y;
+                    if (px >= DETECT_WIDTH || py >= detectHeight) continue;
+
+                    const index = py * DETECT_WIDTH + px;
+                    const i = index * 4;
+
+                    const brightness =
+                        0.3 * data[i] +
+                        0.59 * data[i + 1] +
+                        0.11 * data[i + 2];
+
+                    const diff = Math.abs(brightness - backgroundModel[index]);
+
+                    if (diff > MOTION_THRESHOLD) {
+                        blockMotion++;
+                    }
+
+                    // Update background model
+                    backgroundModel[index] =
+                        backgroundModel[index] * (1 - BG_LEARN_RATE) +
+                        brightness * BG_LEARN_RATE;
+                }
+            }
+
+            if (blockMotion > 4) {
+                blockChanges++;
             }
         }
     }
 
-    previousFrame = brightness;
+    if (blockChanges > MOTION_BLOCK_TRIGGER) {
+        const now = Date.now();
+        if (now - lastSaveTime > SAVE_COOLDOWN) {
+            lastSaveTime = now;
+            captureBurst();
+        }
+    }
+
     requestAnimationFrame(detectMotion);
 }
 
@@ -158,36 +227,40 @@ async function captureBurst() {
     }
 }
 
-// ---------- Grab canvas + apply low-light boost ----------
+// ---------- Full resolution capture ----------
 async function getCanvasBlob() {
-    ctx.drawImage(video, 0, 0);
 
-    const imageData = ctx.getImageData(0,0,canvas.width,canvas.height);
+    captureCtx.drawImage(video, 0, 0);
+
+    const imageData = captureCtx.getImageData(
+        0, 0,
+        captureCanvas.width,
+        captureCanvas.height
+    );
+
     const data = imageData.data;
 
     for(let i=0; i<data.length; i+=4){
-        // Brightness
+
         data[i] *= BRIGHTNESS_BOOST;
         data[i+1] *= BRIGHTNESS_BOOST;
         data[i+2] *= BRIGHTNESS_BOOST;
 
-        // Contrast
         data[i] = ((data[i]-128)*CONTRAST)+128;
         data[i+1] = ((data[i+1]-128)*CONTRAST)+128;
         data[i+2] = ((data[i+2]-128)*CONTRAST)+128;
 
-        // Clamp
         data[i] = Math.min(255, Math.max(0, data[i]));
         data[i+1] = Math.min(255, Math.max(0, data[i+1]));
         data[i+2] = Math.min(255, Math.max(0, data[i+2]));
     }
 
-    ctx.putImageData(imageData, 0, 0);
+    captureCtx.putImageData(imageData, 0, 0);
 
-    return new Promise(resolve => canvas.toBlob(resolve, "image/png"));
+    return new Promise(resolve => captureCanvas.toBlob(resolve, "image/png"));
 }
 
-// ---------- Generate timestamp filename ----------
+// ---------- Timestamp filename ----------
 function generateFilename(burstIndex){
     const now = new Date();
     const ts =
@@ -201,7 +274,7 @@ function generateFilename(burstIndex){
     return `${ts}_burst${burstIndex}.png`;
 }
 
-// ---------- Wake lock release on exit fullscreen ----------
+// ---------- Wake lock release ----------
 document.addEventListener("fullscreenchange", () => {
     if(!document.fullscreenElement && wakeLock){
         wakeLock.release();

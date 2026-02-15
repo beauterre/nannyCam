@@ -36,7 +36,7 @@
 </head>
 <body>
 
-<button id="startBtn">Start Nanny Cam v202602151217</button>
+<button id="startBtn">Start Nanny Cam v202602151220</button>
 <img id="coverImage" src="inconspicuous.png" />
 
 <video id="video" autoplay playsinline></video>
@@ -71,8 +71,6 @@ startBtn.addEventListener("click", async () => {
         // MUST be first (user gesture requirement)
         folderHandle = await window.showDirectoryPicker();
 
-        // Explicitly request write permission while user gesture is active
-        const permission = await folderHandle.requestPermission({ mode: 'readwrite' });
 
 
 

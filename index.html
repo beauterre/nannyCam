@@ -74,10 +74,6 @@ startBtn.addEventListener("click", async () => {
         // Explicitly request write permission while user gesture is active
         const permission = await folderHandle.requestPermission({ mode: 'readwrite' });
 
-        if (permission !== 'granted') {
-            alert("Write permission required.");
-            return;
-        }
 
 
         // Fullscreen

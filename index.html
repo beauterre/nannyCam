@@ -227,10 +227,41 @@ async function captureBurst() {
     }
 }
 
+// Format date like: 2026-02-16 14:03:27
+function getTimestamp() {
+  const now = new Date();
+
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const dd = String(now.getDate()).padStart(2, '0');
+  const hh = String(now.getHours()).padStart(2, '0');
+  const min = String(now.getMinutes()).padStart(2, '0');
+  const ss = String(now.getSeconds()).padStart(2, '0');
+
+  return `${yyyy}-${mm}-${dd} ${hh}:${min}:${ss}`;
+}
+    
 // ---------- Full resolution capture ----------
 async function getCanvasBlob() {
 
     captureCtx.drawImage(video, 0, 0);
+    // also put date here
+    // Security cam style text
+captureCtx.font = "20px monospace";
+captureCtx.fillStyle = "lime";          // typical CCTV green
+captureCtx.textBaseline = "bottom";
+
+// Optional black shadow for readability
+captureCtx.shadowColor = "black";
+captureCtx.shadowBlur = 4;
+
+// Position bottom-left with padding
+const padding = 10;
+captureCtx.fillText(
+  getTimestamp(),
+  padding,
+  captureCtx.canvas.height - padding
+);
 
     const imageData = captureCtx.getImageData(
         0, 0,
